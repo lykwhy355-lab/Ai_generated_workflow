@@ -2,11 +2,11 @@ name: war-news-bot
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # every 30 minutes
-  workflow_dispatch:          # manual run button
+    - cron: '*/30 * * * *' # every 30 minutes
+  workflow_dispatch:      # manual run button
 
 permissions:
-  contents: write             # needed to save state.json back to the repo
+  contents: write         # needed to save state.json back to the repo
 
 concurrency:
   group: war-news
@@ -17,16 +17,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # Fetches full history so git rebase works properly
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
 
-      - run: pip install -r requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
       - name: Run bot
         run: python bot.py
@@ -34,11 +37,35 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          DRY_RUN: "1"   # set to "1" to test without posting
+          DRY_RUN: "1"  # Change to "0" when you are ready to post to Telegram
 
       - name: Save state
         run: |
           git config user.name "news-bot"
           git config user.email "news-bot@users.noreply.github.com"
           git add state.json
-          git diff --cached --quiet || (git commit -m "update state [skip ci]" && git pull --rebase origin main && git push)
+
+          # Check if there are actually any changes to commit
+          if git diff --cached --quiet; then
+            echo "No changes to state.json. Exiting."
+            exit 0
+          fi
+
+          git commit -m "update state [skip ci]"
+
+          # Retry loop to handle simultaneous pushes
+          for attempt in 1 2 3; do
+            if git push; then
+              echo "Successfully pushed on attempt $attempt"
+              break
+            fi
+
+            if [ "$attempt" = "3" ]; then
+              echo "::error::Push failed after 3 attempts."
+              exit 1
+            fi
+
+            echo "Push rejected; pulling --rebase and retrying ($attempt/3)..."
+            git pull --rebase origin main
+            sleep $((attempt * 2))
+          done
